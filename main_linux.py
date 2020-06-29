@@ -1,28 +1,29 @@
-#!/usr/local/bin/env python3
-# -*- coding: utf-8 -*-
-
 import requests
 import yaml
-from time import sleep, time
+from time import sleep, monotonic
 from random import randint
 import os
 from stem import Signal
 from stem.control import Controller
 from bs4 import BeautifulSoup
-
 from selenium import webdriver
 from selenium.webdriver.common.proxy import Proxy, ProxyType
 from selenium.webdriver.chrome.options import Options
+
+
+BOT_TOKEN = ''
 
 
 class parse_bot(object):
     def __init__(self, url_bot_telegram):
         self.url_bot_telegram = url_bot_telegram
         self.session = self.get_session()
+        self.labels_to_search, self.urls = self.get_data_from_simplenote()
+        self.time_without_clean_cache = int(monotonic())
 
     def get_user_agent(self):
         ua = self.file_operation(path='track/ua.yaml', mode='r', yaml_file=True, data=None)
-        inx = randint(0, len(ua)-1)
+        inx = randint(0, len(ua) - 1)
         ua = ua[inx]
         return str(ua)
 
@@ -76,7 +77,7 @@ class parse_bot(object):
                     dump = True
         except:
             if dump == True:
-                print('Начните общение с ботом. Пропишите в чате с ботом любой символ.')
+                print('Начните общение с ботом. Отправьте в чат с ботом любой символ.')
             chat_ids = ['837181918']
             return chat_ids
         if dump:
@@ -112,6 +113,66 @@ class parse_bot(object):
             elif mode == 'w' and yaml_file:
                 yaml.dump(data, file, default_flow_style=False)
 
+    def get_data_from_simplenote(self):
+        turn = 0
+        data = []
+        url_labels = 'http://simp.ly/p/Cn0vSP'
+        url_urls = 'http://simp.ly/p/lSQ9WH'
+        while True:
+            if self.check_connection():
+                while True:
+                    temp_turn = 0
+                    if temp_turn > 5:
+                        self.update_tor_ip()
+                    try:
+                        req = self.session.get(url_labels, timeout=1)
+                        req = BeautifulSoup(req.content, 'lxml')
+                        req = req.find('div', {'class': 'note note-detail-markdown'})
+                        temp = []
+                        for i in req:
+                            href = i.nextSibling
+                            try:
+                                href = href.replace('\n', '')
+                                href = href.replace('  ', '')
+                                temp.append(href)
+                            except:
+                                continue
+                        temp = list(set(temp))
+                        data.append(temp)
+                        break
+                    except:
+                        temp_turn += 1
+                        sleep(2)
+                while True:
+                    temp_turn = 0
+                    if temp_turn > 5:
+                        self.update_tor_ip()
+                    try:
+                        req = self.session.get(url_urls, timeout=1)
+                        req = BeautifulSoup(req.content, 'lxml')
+                        temp = []
+                        req = req.find('div', {'class': 'note note-detail-markdown'})
+                        for i in req:
+                            try:
+                                href = i.get('href')
+                                temp.append(href) if href else None
+                            except:
+                                continue
+                        temp = list(set(temp))
+                        data.append(temp)
+                        break
+                    except:
+                        temp_turn += 1
+                        sleep(2)
+                return data
+            else:
+                if turn > 5:
+                    self.update_tor_ip()
+                    print('Получение нового ip')
+                print('Проверьте интернет соединение')
+                turn += 1
+                sleep(2)
+
     def get_bk_label(self, html):
         soup = BeautifulSoup(html, 'lxml')
         labels = []
@@ -146,44 +207,54 @@ class parse_bot(object):
             if track_on_disk:
                 renew_val = []
                 if key in track_on_disk.keys():
-                    for label in val[1]:
+                    for label in val[0]:
                         renew_val.append(label)
-                        if label not in track_on_disk[key][1]:
-                            news_to_telegram += '{}: {}\n'.format(str(val[-1]), str(label))
-                renew_track[key] = [track[key][0], renew_val]
+                        if label not in track_on_disk[key]:
+                            news_to_telegram += '{}: {}\n'.format(str(val[1]), str(label))
+                    renew_track[key] = renew_val
+                else:
+                    labels = [str(i) for i in val[0]]
+                    labels = ', '.join(labels)
+                    news_to_telegram += '{}: {}\n'.format(str(val[1]), labels)
+                    renew_track[key] = val[0]
+
             else:
-                for label in val[1]:
-                    news_to_telegram += '{}: {}\n'.format(str(val[-1]), str(label))
-                renew_track[key] = val
+                labels = [str(i) for i in val[0]]
+                labels = ', '.join(labels)
+                news_to_telegram += '{}: {}\n'.format(str(val[1]), labels)
+                renew_track[key] = val[0]
 
         self.file_operation(path='track/track.yaml', mode='w', yaml_file=True, data=renew_track)
         if news_to_telegram:
             self.telegram_message(message=news_to_telegram)
         return renew_track
 
-    def tracking(self, browser, windows, track, url, refresh, labels_to_search):
+    def tracking(self, browser, windows, track, url, refresh):
         turn = 0
         while True:
             if self.check_connection():
                 track_lbls = []
-                if windows and not refresh:
+                if not refresh and windows:
                     browser.execute_script("window.open('')")
                 if not refresh:
                     windows[url] = browser.window_handles[-1]
+                if refresh and url not in windows.keys():
+                    browser.execute_script("window.open('')")
+                    for new_window in browser.window_handles:
+                        if new_window not in windows.values():
+                            windows[url] = new_window
+                    refresh = False
                 browser.switch_to.window(windows[url])
                 try:
-                    if refresh:
-                        browser.refresh()
-                    else:
-                        browser.get(url)
+                    browser.refresh() if refresh else browser.get(url)
                     sleep(4)
                     all_lbls, title = self.get_bk_label(html=browser.page_source)
                 except:
                     all_lbls = []
                     title = ''
                 if all_lbls:
-                    track_lbls = [i for i in labels_to_search if i in all_lbls]
-                track[url] = [int(time()), track_lbls, title]
+                    track_lbls = [i for i in self.labels_to_search if i in all_lbls]
+                track[url] = [track_lbls, title]
                 return windows, track
             else:
                 if turn > 5:
@@ -194,7 +265,41 @@ class parse_bot(object):
                         continue
                 print('Проверьте интернет соединение')
                 turn += 1
-                sleep(5)
+                sleep(2)
+
+    def del_old_urls(self, windows, track):
+        old_urls = windows.copy()
+        for old_url in old_urls.keys():
+            if old_url not in self.urls:
+                _ = track.pop(old_url)
+                _ = windows.pop(old_url)
+        return windows, track
+
+    def close_old_windows(self, windows, browser, track):
+        empty_windows_key = ''
+        if not track:
+            browser.execute_script("window.open('')")
+            for window_key in browser.window_handles:
+                if window_key not in windows.values():
+                    empty_windows_key = window_key
+
+        for window_key in browser.window_handles:
+            if window_key not in windows.values() and window_key != empty_windows_key:
+                browser.switch_to.window(window_key)
+                browser.close()
+
+    def clear_cache(self, browser):
+        send_command = ('POST', '/session/$sessionId/chromium/send_command')
+        browser.command_executor._commands['SEND_COMMAND'] = send_command
+        _ = browser.execute('SEND_COMMAND', dict(cmd='Network.clearBrowserCache', params={}))
+
+
+def load_ua():
+    with open('track/ua.yaml', 'r') as file:
+        ua = yaml.safe_load(file)
+        inx = randint(0, len(ua) - 1)
+        ua = ua[inx]
+    return ua
 
 
 def make_options(path2google_chrome='/usr/bin/google-chrome', headless=True, proxing=False):
@@ -206,6 +311,7 @@ def make_options(path2google_chrome='/usr/bin/google-chrome', headless=True, pro
     options.binary_location = (path2google_chrome)
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument('--no-sandbox')
+    options.add_argument(f'user-agent={load_ua()}')
     dict_options['options'] = options
 
     if proxing:
@@ -222,29 +328,24 @@ def make_options(path2google_chrome='/usr/bin/google-chrome', headless=True, pro
 
 
 def main():
-    url_bot_telegram = ''
-    bot = parse_bot(url_bot_telegram=url_bot_telegram)
+    bot = parse_bot(url_bot_telegram=BOT_TOKEN)
     with webdriver.Chrome(**make_options(headless=True, proxing=True)) as browser:
-        urls = bot.file_operation(path='order/urls.txt', mode='r', yaml_file=False)
-        labels_to_search = bot.file_operation(path='order/labels.txt', mode='r', yaml_file=False)
-
         windows = {}
         track = {}
-        refresh = False
         while True:
-            for url in urls:
-                if refresh:
-                    _, track = bot.tracking(browser=browser, windows=windows, track=track, url=url, refresh=refresh,
-                                            labels_to_search=labels_to_search)
-                else:
-                    windows, track = bot.tracking(browser=browser, windows=windows, track=track, url=url,
-                                                  refresh=refresh,
-                                                  labels_to_search=labels_to_search)
-            refresh = True
+            refresh = True if track else False
+            for url in bot.urls:
+                windows, track = bot.tracking(browser=browser, windows=windows, track=track, url=url, refresh=refresh)
             if track:
                 track = bot.resave_track(track=track)
+            bot.labels_to_search, bot.urls = bot.get_data_from_simplenote()
+            windows, track = bot.del_old_urls(windows=windows, track=track)
+            bot.close_old_windows(windows=windows, browser=browser, track=track)
+            if monotonic() - bot.time_without_clean_cache > 3100:
+                bot.clear_cache(browser=browser)
+                bot.time_without_clean_cache = int(monotonic())
+            sleep(5)
 
-            sleep(30)
 
 if __name__ == '__main__':
     main()
